@@ -6,8 +6,8 @@ task or an interactive server would hang the tool call.
 """
 import io
 import json
+import pathlib
 import sys
-import types
 import unittest
 
 from loader import load
@@ -49,6 +49,16 @@ class NoisyCommandsAreWrapped(unittest.TestCase):
 
     def test_after_a_conditional_separator(self):
         self.assertIsNotNone(wrapped("pnpm install && pnpm test"))
+
+    def test_on_a_later_line_of_a_multi_line_command(self):
+        # Claude Code routinely sends several statements on separate lines,
+        # because PowerShell's working directory resets between tool calls.
+        # A newline is a statement separator like any other.
+        self.assertIsNotNone(
+            wrapped("Set-Location C:/repo\n.\\node_modules\\.bin\\jest.cmd"))
+
+    def test_a_quiet_first_line_does_not_shield_a_noisy_second(self):
+        self.assertIsNotNone(wrapped("$env:CI = '1'\npnpm test"))
 
 
 class QuietCommandsAreUntouched(unittest.TestCase):
@@ -117,7 +127,13 @@ class TheRewriteShape(unittest.TestCase):
         self.assertIn("else { $o }", self.result)
 
     def test_invokes_the_interpreter_running_this_hook_not_bare_python(self):
-        self.assertIn(f'"{sys.executable}"', self.result)
+        self.assertIn(pathlib.Path(sys.executable).as_posix(), self.result)
+
+    def test_carries_no_backslash_paths(self):
+        # A Windows backslash path survives the shell but not every layer
+        # that parses the command on the way there. The hook then silently
+        # never fires, which is the worst possible failure mode.
+        self.assertNotIn(BACKSLASH, self.result)
 
 
 class TheHookProtocol(unittest.TestCase):

@@ -89,19 +89,27 @@ def rewrite_powershell(command):
 
 
 def rewrite_bash(command):
-    """`set -o pipefail` carries the wrapped command's exit status through the
-    pipe, which is otherwise the filter's own.
+    """Capture to a file, then filter - the same shape as the PowerShell
+    branch, and for a closely related reason.
 
-    A brace group, not a subshell: `cd` has to stay effective for later tool
-    calls. It also makes a multi-line command pipe as a whole - without it
-    only the last line would reach the filter.
+    Bash runs every stage of a pipeline in a subshell, so piping the command
+    straight into the filter discards any `cd` it performed. Claude Code's
+    Bash tool carries the working directory between calls, so that silently
+    breaks the next one. `set -o pipefail` would have preserved the exit
+    status but not the directory. Redirecting to a file instead keeps the
+    brace group in the current shell.
 
-    The `[ -f ]` test degrades to `cat` if the filter is missing.
+    The group also means a multi-line command is captured whole rather than
+    only its final line. `(exit ...)` re-raises the status without
+    terminating the shell, and `[ -f ]` degrades to `cat` if the filter is
+    missing.
     """
     python = f'"{interpreter()}"'
     return (
-        f"set -o pipefail; {{\n{command}\n}} 2>&1 | "
-        f'{{ [ -f "{FILTER}" ] && {python} "{FILTER}" || cat; }}'
+        f'__ct=$(mktemp); {{\n{command}\n}} > "$__ct" 2>&1; __cs=$?; '
+        f'{{ [ -f "{FILTER}" ] && {python} "{FILTER}" < "$__ct" '
+        f'|| cat "$__ct"; }}; '
+        f'rm -f "$__ct"; (exit $__cs)'
     )
 
 

@@ -75,10 +75,11 @@ PASSING = re.compile(
 def clean(raw):
     """Strip ANSI, collapse carriage-return overwrites, drop chatter."""
     out = []
-    for line in raw.splitlines():
-        line = line.split("\r")[-1]          # progress bars overwrite in place
-        line = ANSI.sub("", line).rstrip()
-        if NOISE.search(line):
+    for line in raw.split("\n"):             # not splitlines(): it breaks on
+        line = ANSI.sub("", line).rstrip()   # \r too, which would turn one
+        line = line.split("\r")[-1]          # overwritten progress bar into
+        if NOISE.search(line):               # hundreds of separate lines.
+
             continue
         out.append(line)
     return out

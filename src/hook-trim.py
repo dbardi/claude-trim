@@ -1,9 +1,10 @@
 """PreToolUse hook: rewrite noisy build/install/test commands to pipe through
 the output filter.
 
-Wired up in ~/.claude/settings.json by install.py:
+Wired up in ~/.claude/settings.json by install.py, against whichever shell
+tool Claude Code uses on this platform:
 
-    {"matcher": "PowerShell",
+    {"matcher": "PowerShell",   # or "Bash", or "Bash|PowerShell"
      "hooks": [{"type": "command", "command": "<python> <dir>/hook-trim.py"}]}
 
 Reads the tool call as JSON on stdin. Emits either {} (leave the command
@@ -17,11 +18,12 @@ import pathlib
 import re
 import sys
 
-SHELL = "PowerShell"
-FILTER = "$HOME/.claude/trim-output.py"
+# Beside this file, wherever it was installed - not a hardcoded ~/.claude,
+# so a --target install still finds its own filter.
+FILTER = (pathlib.Path(__file__).resolve().parent / "trim-output.py").as_posix()
 
-# Commands that print a lot and say little. Matched at the start of the
-# command or after a statement separator, so "cd foo; pnpm test" is caught.
+# Commands that print a lot and say little. Matched at the start of any line,
+# or after a statement separator, so "cd foo; pnpm test" is caught.
 NOISY = re.compile(
     r"""(^|[;&|]\s*|&&\s*)(
         pnpm\s+(install|i|add|update|build|test|lint|typecheck|parity:)
@@ -60,20 +62,20 @@ EXEMPT = re.compile(
 def interpreter():
     """The interpreter already running this hook. It is guaranteed to exist
     and to be a version the filter parses. Assuming `python` is on PATH is the
-    most common way a working install breaks on someone else's machine.
+    most common way a working install breaks on someone else's machine - on
+    macOS and most Linux distributions there is no bare `python` at all.
 
-    Forward slashes: PowerShell accepts them on Windows, and they survive
-    every quoting layer between here and the shell."""
-    return pathlib.Path(sys.executable).as_posix() if sys.executable else "python"
+    Forward slashes: Windows accepts them, and they carry through every
+    quoting layer between here and the shell unambiguously.
+    """
+    return pathlib.Path(sys.executable).as_posix() if sys.executable else "python3"
 
 
-def rewrite(command):
+def rewrite_powershell(command):
     """PowerShell has no `set -o pipefail`, so capture the output first while
     $LASTEXITCODE still belongs to the wrapped command, then filter and
-    re-raise that code.
+    re-raise that code. $LASTEXITCODE is null when nothing native ran.
 
-    `~` is not expanded inside a native command's arguments, so the filter
-    path goes through $HOME. $LASTEXITCODE is null when nothing native ran.
     Test-Path degrades to unfiltered output if the filter is missing.
     """
     python = f'"{interpreter()}"'
@@ -86,9 +88,30 @@ def rewrite(command):
     )
 
 
+def rewrite_bash(command):
+    """`set -o pipefail` carries the wrapped command's exit status through the
+    pipe, which is otherwise the filter's own.
+
+    A brace group, not a subshell: `cd` has to stay effective for later tool
+    calls. It also makes a multi-line command pipe as a whole - without it
+    only the last line would reach the filter.
+
+    The `[ -f ]` test degrades to `cat` if the filter is missing.
+    """
+    python = f'"{interpreter()}"'
+    return (
+        f"set -o pipefail; {{\n{command}\n}} 2>&1 | "
+        f'{{ [ -f "{FILTER}" ] && {python} "{FILTER}" || cat; }}'
+    )
+
+
+REWRITERS = {"Bash": rewrite_bash, "PowerShell": rewrite_powershell}
+
+
 def decide(command, tool_name):
     """Return the rewritten command, or None to leave it untouched."""
-    if tool_name != SHELL or not command or "trim-output" in command:
+    rewrite = REWRITERS.get(tool_name)
+    if rewrite is None or not command or "trim-output" in command:
         return None
     if EXEMPT.search(command):
         return None

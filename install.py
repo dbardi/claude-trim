@@ -14,8 +14,18 @@ import shutil
 import sys
 
 SOURCES = ("hook-trim.py", "trim-output.py")
-MATCHER = "PowerShell"
 MARKER = "hook-trim.py"
+
+# Which shell tool Claude Code drives. Windows sessions use PowerShell;
+# macOS and Linux sessions use Bash. Matching a tool the platform never
+# offers is harmless but silent, so the default follows the platform.
+MATCHERS = {"powershell": "PowerShell",
+            "bash": "Bash",
+            "both": "Bash|PowerShell"}
+
+
+def default_shell():
+    return "powershell" if sys.platform == "win32" else "bash"
 
 
 def default_target():
@@ -39,7 +49,7 @@ def hook_entry(script):
     }
 
 
-def merge_hook(config, script):
+def merge_hook(config, script, matcher):
     """Add the hook, leaving every other setting untouched.
 
     Idempotent, and it upgrades an existing install in place. Appending
@@ -53,9 +63,9 @@ def merge_hook(config, script):
             if MARKER in command.get("command", ""):
                 command.clear()
                 command.update(hook_entry(script))
-                entry["matcher"] = MATCHER
+                entry["matcher"] = matcher
                 return config
-    entries.append({"matcher": MATCHER, "hooks": [hook_entry(script)]})
+    entries.append({"matcher": matcher, "hooks": [hook_entry(script)]})
     return config
 
 
@@ -93,11 +103,14 @@ def write_settings(path, config, backup):
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
-def report_shell():
-    if shutil.which("pwsh") or shutil.which("powershell"):
+def report_shell(shell):
+    """A hook matching a tool this platform never offers fires never, and
+    says nothing about it. Warn rather than let it fail silently."""
+    if shell == "bash" or shutil.which("pwsh") or shutil.which("powershell"):
         return
-    print("  ! PowerShell was not found on PATH. This hook only matches the\n"
-          "    PowerShell tool, so it will never fire without it.")
+    print("  ! PowerShell was not found on PATH. The hook is scoped to the\n"
+          "    PowerShell tool, so it will never fire. Reinstall with\n"
+          "    --shell bash if this session drives Bash instead.")
 
 
 def main():
@@ -108,13 +121,19 @@ def main():
                         help="show what would change, write nothing")
     parser.add_argument("--no-backup", action="store_true",
                         help="do not copy settings.json aside first")
+    parser.add_argument("--shell", choices=sorted(MATCHERS), default=None,
+                        help="shell tool to hook (default: follows platform)")
     args = parser.parse_args()
 
+    shell = args.shell or default_shell()
     here = pathlib.Path(__file__).resolve().parent / "src"
     settings = args.target / "settings.json"
-    merged = merge_hook(read_settings(settings), str(args.target / MARKER))
+    merged = merge_hook(read_settings(settings), str(args.target / MARKER),
+                        MATCHERS[shell])
 
+    print(f"platform    {sys.platform}")
     print(f"target      {args.target}")
+    print(f"  matcher   {MATCHERS[shell]}")
     for name in SOURCES:
         print(f"  copy      {name}")
     print(f"  merge     {settings.name} "
@@ -131,7 +150,7 @@ def main():
     write_settings(settings, merged, backup=not args.no_backup)
 
     print("\ninstalled.")
-    report_shell()
+    report_shell(shell)
     print("  Open /hooks once, or start a new session, if it does not fire.")
 
 

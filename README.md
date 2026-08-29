@@ -164,25 +164,12 @@ by uninstall returns `settings.json` to its original contents.
 python -m unittest discover -s tests
 ```
 
-71 tests, no dependencies beyond the standard library. They cover what gets
-wrapped, what must *not* get wrapped, the shape of both rewrites, that neither
-shell's syntax leaks into the other, the hook's JSON protocol, what the filter
-keeps and drops, platform-correct matcher selection, and — most importantly —
-that merging into `settings.json` never disturbs anything else in it.
+71 tests, no dependencies beyond the standard library.
 
-Several exist because of bugs that were expensive to find, and they share a
-failure mode: **breaking quietly, in a way that looks like nothing happened.**
-
-- A build tool on the second line of a multi-statement command never matched,
-  because `NOISY` anchored on `^` without `re.MULTILINE`. A hook that decides
-  "leave alone" is indistinguishable from a hook that is not installed.
-- `str.splitlines()` breaks on `\r` as well as `\n`, so a progress bar
-  overwriting itself in place was *expanded* into one line per update — the
-  exact output this tool exists to suppress.
-- Piping the command into the filter on Bash discarded any `cd` it performed,
-  because Bash runs pipeline stages in subshells. The command itself still
-  worked; the *next* one ran in the wrong directory.
-
-The last was only caught by running the hook on a real Linux system. An
-earlier check on Git Bash appeared to pass because the shell was already in
-the target directory, so the `cd` was a no-op.
+| Area | Covers |
+| --- | --- |
+| Command matching | what gets wrapped, and what is deliberately left alone |
+| Rewrite shape | exit-status handling, working-directory preservation, filter guards, multi-line capture, and that neither shell's syntax leaks into the other |
+| Hook protocol | the JSON contract with Claude Code, including malformed input |
+| Filter behaviour | what survives and what is dropped, ANSI codes, carriage-return overwrites, and output the console codepage cannot encode |
+| Installation | platform-correct matcher selection, idempotent reinstall, and that merging into `settings.json` never disturbs anything else in it |

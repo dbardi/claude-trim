@@ -103,11 +103,17 @@ class ShellDispatch(unittest.TestCase):
 
     def test_each_shell_gets_its_own_syntax(self):
         self.assertIn("Out-String", wrapped("pnpm test", tool="PowerShell"))
-        self.assertIn("set -o pipefail", wrapped("pnpm test", tool="Bash"))
+        self.assertIn("mktemp", wrapped("pnpm test", tool="Bash"))
 
     def test_neither_shells_syntax_leaks_into_the_other(self):
-        self.assertNotIn("pipefail", wrapped("pnpm test", tool="PowerShell"))
+        self.assertNotIn("mktemp", wrapped("pnpm test", tool="PowerShell"))
         self.assertNotIn("LASTEXITCODE", wrapped("pnpm test", tool="Bash"))
+
+    def test_both_capture_before_filtering_for_the_same_reason(self):
+        # Neither shell can filter in a pipeline without losing something:
+        # PowerShell loses the exit code, Bash loses the working directory.
+        self.assertIn("$o = &", wrapped("pnpm test", tool="PowerShell"))
+        self.assertIn("__ct=$(mktemp)", wrapped("pnpm test", tool="Bash"))
 
 
 class TheBashRewriteShape(unittest.TestCase):
@@ -118,21 +124,31 @@ class TheBashRewriteShape(unittest.TestCase):
     def test_merges_stderr_so_failures_are_not_lost(self):
         self.assertIn("2>&1", self.result)
 
-    def test_pipefail_carries_the_exit_status_through_the_pipe(self):
-        # Without it the pipeline reports the filter's status, and a failed
-        # build looks like a successful one.
-        self.assertIn("set -o pipefail", self.result)
+    def test_captures_the_exit_status_before_the_filter_overwrites_it(self):
+        self.assertIn("__cs=$?", self.result)
+
+    def test_reraises_the_status_without_terminating_the_shell(self):
+        self.assertIn("(exit $__cs)", self.result)
 
     def test_degrades_to_cat_when_the_filter_is_missing(self):
         self.assertIn("|| cat", self.result)
 
-    def test_groups_in_the_current_shell_so_cd_survives(self):
-        # A subshell would discard any cd before the next tool call.
-        self.assertNotIn("("[0] + " " + "cd", self.result)
-        self.assertRegex(self.result, r"pipefail; \{")
+    def test_the_command_is_never_placed_in_a_pipeline(self):
+        # Bash runs every stage of a pipeline in a subshell, so piping the
+        # command straight into the filter discards any cd it performed.
+        # Claude Code's Bash tool carries the working directory between
+        # calls, so that silently breaks the next one.
+        self.assertNotIn("} 2>&1 |", self.result)
 
-    def test_a_multi_line_command_pipes_as_a_whole(self):
-        # Without the group, only the final line would reach the filter.
+    def test_redirects_to_a_file_so_the_group_stays_in_this_shell(self):
+        self.assertIn("mktemp", self.result)
+        self.assertRegex(self.result, r'\}\s*>\s*"\$__ct"\s*2>&1')
+
+    def test_cleans_up_after_itself(self):
+        self.assertIn('rm -f "$__ct"', self.result)
+
+    def test_a_multi_line_command_is_captured_as_a_whole(self):
+        # Without the group, only the final line would be redirected.
         result = wrapped("cd /repo\npnpm test", tool="Bash")
         self.assertIn("cd /repo\npnpm test\n}", result)
 

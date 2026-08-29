@@ -112,9 +112,11 @@ The hook returns a rewritten command through
 `hookSpecificOutput.updatedInput`. On Bash:
 
 ```bash
-set -o pipefail; {
+__ct=$(mktemp); {
 <your command>
-} 2>&1 | { [ -f "<filter>" ] && "<python>" "<filter>" || cat; }
+} > "$__ct" 2>&1; __cs=$?
+{ [ -f "<filter>" ] && "<python>" "<filter>" < "$__ct" || cat "$__ct"; }
+rm -f "$__ct"; (exit $__cs)
 ```
 
 On PowerShell:
@@ -128,13 +130,15 @@ exit ($c ?? 0)
 
 Details that are load-bearing in both:
 
-- **The exit status survives the pipe.** Bash gets `set -o pipefail`;
-  PowerShell has no equivalent, so the output is captured first while
-  `$LASTEXITCODE` still belongs to the wrapped command. Without this a failed
-  build reports the *filter's* success.
-- **A brace group, not a subshell.** `{ }` keeps `cd` effective for later tool
-  calls, and makes a multi-line command pipe as a whole — otherwise only its
-  last line reaches the filter.
+- **Neither shell filters in a pipeline.** Both capture the output first, for
+  different reasons. PowerShell has no `set -o pipefail`, so a pipeline would
+  report the *filter's* exit code and a failed build would look successful.
+  Bash runs every stage of a pipeline in a subshell, so a pipeline would
+  discard any `cd` the command performed — and Claude Code's Bash tool carries
+  the working directory between calls, so the *next* command would silently
+  run in the wrong place. `set -o pipefail` fixes the exit code but not that.
+- **A brace group** so a multi-line command is captured whole; without it only
+  the final line would be redirected.
 - **The interpreter is an absolute path**, taken from the interpreter already
   running the hook. There is no bare `python` on most macOS and Linux
   installs.
@@ -160,15 +164,25 @@ by uninstall returns `settings.json` to its original contents.
 python -m unittest discover -s tests
 ```
 
-67 tests, no dependencies beyond the standard library. They cover what gets
+71 tests, no dependencies beyond the standard library. They cover what gets
 wrapped, what must *not* get wrapped, the shape of both rewrites, that neither
 shell's syntax leaks into the other, the hook's JSON protocol, what the filter
 keeps and drops, platform-correct matcher selection, and — most importantly —
 that merging into `settings.json` never disturbs anything else in it.
 
-Two of them exist because of bugs that were expensive to find, and both are
-the same failure mode: **a hook that silently does nothing looks exactly like
-a hook that is not installed.** One was a build tool on the second line of a
-multi-statement command never matching; the other was `str.splitlines()`
-breaking on `\r`, which multiplied the progress bars this tool exists to
-suppress instead of collapsing them.
+Several exist because of bugs that were expensive to find, and they share a
+failure mode: **breaking quietly, in a way that looks like nothing happened.**
+
+- A build tool on the second line of a multi-statement command never matched,
+  because `NOISY` anchored on `^` without `re.MULTILINE`. A hook that decides
+  "leave alone" is indistinguishable from a hook that is not installed.
+- `str.splitlines()` breaks on `\r` as well as `\n`, so a progress bar
+  overwriting itself in place was *expanded* into one line per update — the
+  exact output this tool exists to suppress.
+- Piping the command into the filter on Bash discarded any `cd` it performed,
+  because Bash runs pipeline stages in subshells. The command itself still
+  worked; the *next* one ran in the wrong directory.
+
+The last was only caught by running the hook on a real Linux system. An
+earlier check on Git Bash appeared to pass because the shell was already in
+the target directory, so the `cd` was a no-op.

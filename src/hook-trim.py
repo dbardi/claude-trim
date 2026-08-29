@@ -13,6 +13,7 @@ Keeping the match list here rather than in settings.json `if` rules means one
 readable, testable place to edit - adding a build tool is a one-line change.
 """
 import json
+import pathlib
 import re
 import sys
 
@@ -36,7 +37,10 @@ NOISY = re.compile(
       | go\s+(build|test)
       | make\b
     )""",
-    re.IGNORECASE | re.VERBOSE,
+    # MULTILINE so ^ anchors at every line, not just the first. Claude Code
+    # sends multi-statement commands across several lines, and a newline
+    # separates statements exactly as ; and && do.
+    re.IGNORECASE | re.VERBOSE | re.MULTILINE,
 )
 
 # Never rewrite these, even though they match above - the pipe would break
@@ -56,8 +60,11 @@ EXEMPT = re.compile(
 def interpreter():
     """The interpreter already running this hook. It is guaranteed to exist
     and to be a version the filter parses. Assuming `python` is on PATH is the
-    most common way a working install breaks on someone else's machine."""
-    return sys.executable or "python"
+    most common way a working install breaks on someone else's machine.
+
+    Forward slashes: PowerShell accepts them on Windows, and they survive
+    every quoting layer between here and the shell."""
+    return pathlib.Path(sys.executable).as_posix() if sys.executable else "python"
 
 
 def rewrite(command):

@@ -23,11 +23,17 @@ def default_target():
 
 
 def hook_entry(script):
-    """Absolute interpreter and script path. `python` is not on PATH on every
-    machine, and `~` is not expanded by every shell that runs a hook."""
+    """Absolute interpreter and script path, written with forward slashes.
+
+    `python` is not on PATH on every machine and `~` is not expanded by every
+    shell that runs a hook, so both are resolved here. Windows backslashes are
+    not usable: they survive a shell but not every layer that parses the
+    command on the way there, and the hook then silently never fires.
+    """
     return {
         "type": "command",
-        "command": f'"{sys.executable}" "{script}"',
+        "command": f'"{pathlib.Path(sys.executable).as_posix()}" '
+                   f'"{pathlib.Path(script).as_posix()}"',
         "statusMessage": "Trimming noisy output",
         "timeout": 10,
     }

@@ -92,12 +92,49 @@ class ExemptionsAreHonoured(unittest.TestCase):
         self.assertIsNone(wrapped("pnpm build > build.log"))
 
 
-class OnlyThisShell(unittest.TestCase):
+class ShellDispatch(unittest.TestCase):
+    """Windows sessions drive PowerShell; macOS and Linux drive Bash. The
+    rewrites are not interchangeable, so the wrong one is worse than none."""
 
-    def test_other_tools_are_not_this_hooks_business(self):
-        for tool in ["Bash", "Write", "Read", ""]:
+    def test_non_shell_tools_are_not_this_hooks_business(self):
+        for tool in ["Write", "Read", "Glob", ""]:
             with self.subTest(tool=tool):
                 self.assertIsNone(wrapped("pnpm test", tool=tool))
+
+    def test_each_shell_gets_its_own_syntax(self):
+        self.assertIn("Out-String", wrapped("pnpm test", tool="PowerShell"))
+        self.assertIn("set -o pipefail", wrapped("pnpm test", tool="Bash"))
+
+    def test_neither_shells_syntax_leaks_into_the_other(self):
+        self.assertNotIn("pipefail", wrapped("pnpm test", tool="PowerShell"))
+        self.assertNotIn("LASTEXITCODE", wrapped("pnpm test", tool="Bash"))
+
+
+class TheBashRewriteShape(unittest.TestCase):
+
+    def setUp(self):
+        self.result = wrapped("dotnet build", tool="Bash")
+
+    def test_merges_stderr_so_failures_are_not_lost(self):
+        self.assertIn("2>&1", self.result)
+
+    def test_pipefail_carries_the_exit_status_through_the_pipe(self):
+        # Without it the pipeline reports the filter's status, and a failed
+        # build looks like a successful one.
+        self.assertIn("set -o pipefail", self.result)
+
+    def test_degrades_to_cat_when_the_filter_is_missing(self):
+        self.assertIn("|| cat", self.result)
+
+    def test_groups_in_the_current_shell_so_cd_survives(self):
+        # A subshell would discard any cd before the next tool call.
+        self.assertNotIn("("[0] + " " + "cd", self.result)
+        self.assertRegex(self.result, r"pipefail; \{")
+
+    def test_a_multi_line_command_pipes_as_a_whole(self):
+        # Without the group, only the final line would reach the filter.
+        result = wrapped("cd /repo\npnpm test", tool="Bash")
+        self.assertIn("cd /repo\npnpm test\n}", result)
 
 
 class WrappingIsIdempotent(unittest.TestCase):

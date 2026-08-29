@@ -7,11 +7,13 @@ the hook simply not installing.
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import install  # noqa: E402
 
 SCRIPT = "/home/u/.claude/hook-trim.py"
+MATCHER = "PowerShell"
 
 
 def hooked(config):
@@ -28,7 +30,7 @@ def ours(config):
 class MergingIntoAnEmptyConfig(unittest.TestCase):
 
     def setUp(self):
-        self.result = install.merge_hook({}, SCRIPT)
+        self.result = install.merge_hook({}, SCRIPT, MATCHER)
 
     def test_creates_the_hook(self):
         self.assertEqual(1, len(ours(self.result)))
@@ -53,7 +55,7 @@ class MergingIntoAPopulatedConfig(unittest.TestCase):
                         {"type": "command", "command": "log-it.sh"}]}],
             },
         }
-        self.result = install.merge_hook(self.before, SCRIPT)
+        self.result = install.merge_hook(self.before, SCRIPT, MATCHER)
 
     def test_unrelated_settings_are_untouched(self):
         self.assertEqual(True, self.result["alwaysThinkingEnabled"])
@@ -75,15 +77,15 @@ class MergingIntoAPopulatedConfig(unittest.TestCase):
 class InstallingTwice(unittest.TestCase):
 
     def test_leaves_exactly_one_hook(self):
-        once = install.merge_hook({}, SCRIPT)
-        twice = install.merge_hook(once, SCRIPT)
+        once = install.merge_hook({}, SCRIPT, MATCHER)
+        twice = install.merge_hook(once, SCRIPT, MATCHER)
         self.assertEqual(1, len(ours(twice)))
 
     def test_upgrades_an_older_install_in_place(self):
         old = {"hooks": {"PreToolUse": [
             {"matcher": "Bash|PowerShell", "hooks": [
                 {"type": "command", "command": "python ~/.claude/hook-trim.py"}]}]}}
-        upgraded = install.merge_hook(old, SCRIPT)
+        upgraded = install.merge_hook(old, SCRIPT, MATCHER)
         self.assertEqual(1, len(ours(upgraded)))
         self.assertEqual("PowerShell",
                          upgraded["hooks"]["PreToolUse"][0]["matcher"])
@@ -93,14 +95,14 @@ class InstallingTwice(unittest.TestCase):
 class Removing(unittest.TestCase):
 
     def test_takes_the_hook_out(self):
-        installed = install.merge_hook({}, SCRIPT)
+        installed = install.merge_hook({}, SCRIPT, MATCHER)
         self.assertEqual([], ours(install.remove_hook(installed)))
 
     def test_leaves_other_hooks_alone(self):
         config = {"hooks": {"PreToolUse": [
             {"matcher": "Bash", "hooks": [
                 {"type": "command", "command": "log-it.sh"}]}]}}
-        result = install.remove_hook(install.merge_hook(config, SCRIPT))
+        result = install.remove_hook(install.merge_hook(config, SCRIPT, MATCHER))
         self.assertEqual(["log-it.sh"], hooked(result))
 
     def test_is_a_no_op_when_the_hook_was_never_installed(self):
@@ -108,8 +110,33 @@ class Removing(unittest.TestCase):
         self.assertEqual(config, install.remove_hook(config))
 
     def test_drops_containers_that_only_existed_for_this_hook(self):
-        result = install.remove_hook(install.merge_hook({}, SCRIPT))
+        result = install.remove_hook(install.merge_hook({}, SCRIPT, MATCHER))
         self.assertNotIn("hooks", result)
+
+
+class ShellSelection(unittest.TestCase):
+    """The matcher has to name the shell tool Claude Code actually drives on
+    this platform. Get it wrong and the hook installs cleanly, reports
+    success, and then never fires."""
+
+    def platform_is(self, name):
+        return mock.patch.object(install.sys, "platform", name)
+
+    def test_windows_sessions_hook_powershell(self):
+        with self.platform_is("win32"):
+            self.assertEqual("powershell", install.default_shell())
+
+    def test_macos_and_linux_sessions_hook_bash(self):
+        for name in ["darwin", "linux"]:
+            with self.subTest(platform=name), self.platform_is(name):
+                self.assertEqual("bash", install.default_shell())
+
+    def test_the_chosen_matcher_reaches_the_written_entry(self):
+        result = install.merge_hook({}, SCRIPT, install.MATCHERS["bash"])
+        self.assertEqual("Bash", result["hooks"]["PreToolUse"][0]["matcher"])
+
+    def test_both_is_available_for_a_machine_running_either(self):
+        self.assertEqual("Bash|PowerShell", install.MATCHERS["both"])
 
 
 class InstallThenUninstall(unittest.TestCase):
@@ -121,7 +148,7 @@ class InstallThenUninstall(unittest.TestCase):
                 {"matcher": "Bash", "hooks": [
                     {"type": "command", "command": "log-it.sh"}]}]},
         }
-        after = install.remove_hook(install.merge_hook(before, SCRIPT))
+        after = install.remove_hook(install.merge_hook(before, SCRIPT, MATCHER))
         self.assertEqual(before, after)
 
 

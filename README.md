@@ -48,8 +48,15 @@ build`/`test`/`restore`/`publish` · `msbuild` · `jest` · `tsc` · `eslint` ·
 `vitest` · `playwright` · `gradlew` · `mvn` · `pip install` · `cargo` ·
 `go build`/`test` · `make`
 
-Matched at the start of a command or after a `;`, `&&` or `|`, so
-`cd apps/web; pnpm build` is caught too.
+Matched at the start of any line, or after a `;`, `&&` or `|`. Both
+`cd apps/web; pnpm build` and
+
+```powershell
+Set-Location C:/repo
+pnpm build
+```
+
+are caught — multi-statement commands are the normal case, not the exception.
 
 ## What it leaves alone
 
@@ -137,7 +144,14 @@ by uninstall returns `settings.json` to its original contents.
 python -m unittest discover -s tests
 ```
 
-53 tests, no dependencies beyond the standard library. They cover what gets
+56 tests, no dependencies beyond the standard library. They cover what gets
 wrapped, what must *not* get wrapped, the shape of the rewrite, the hook's
 JSON protocol, what the filter keeps and drops, and — most importantly — that
 merging into `settings.json` never disturbs anything else in it.
+
+Two of them exist because of bugs that were expensive to find, and both are
+the same failure mode: **a hook that silently does nothing looks exactly like
+a hook that is not installed.** One was a build tool on the second line of a
+multi-statement command never matching; the other was `str.splitlines()`
+breaking on `\r`, which multiplied the progress bars this tool exists to
+suppress instead of collapsing them.

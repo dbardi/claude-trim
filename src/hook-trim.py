@@ -16,7 +16,10 @@ readable, testable place to edit - adding a build tool is a one-line change.
 import json
 import pathlib
 import re
+import shlex
 import sys
+import tempfile
+import uuid
 
 # Beside this file, wherever it was installed - not a hardcoded ~/.claude,
 # so a --target install still finds its own filter.
@@ -89,41 +92,45 @@ def rewrite_powershell(command):
 
 
 def rewrite_bash(command):
-    """Capture to a file, then filter - the same shape as the PowerShell
+    """Capture to a file, then filter it - the same shape as the PowerShell
     branch, and for a closely related reason.
 
     Bash runs every stage of a pipeline in a subshell, so piping the command
     straight into the filter discards any `cd` it performed. Claude Code's
     Bash tool carries the working directory between calls, so that silently
-    breaks the next one. `set -o pipefail` would have preserved the exit
-    status but not the directory. Redirecting to a file instead keeps the
-    brace group in the current shell.
+    breaks the next one. Redirecting a brace group to a file keeps the command
+    in the current shell, and captures a multi-line command whole.
 
-    The group also means a multi-line command is captured whole rather than
-    only its final line. `(exit ...)` re-raises the status without
-    terminating the shell, and `[ -f ]` degrades to `cat` if the filter is
-    missing.
+    Nothing here asks the shell to expand anything. When reads outside the
+    working directories are blocked, Claude Code asks the user about any
+    command it cannot analyse statically, so a `$(mktemp)` or a `$?` would
+    make every rewritten build ask, even one the user has allowed. The capture
+    path is chosen here instead, the filter learns the outcome from which side
+    of `&& ... ||` runs it, and it removes the capture file itself.
     """
-    python = f'"{interpreter()}"'
-    return (
-        f'__ct=$(mktemp); {{\n{command}\n}} > "$__ct" 2>&1; __cs=$?; '
-        f'{{ [ -f "{FILTER}" ] && {python} "{FILTER}" < "$__ct" '
-        f'|| cat "$__ct"; }}; '
-        f'rm -f "$__ct"; (exit $__cs)'
-    )
+    capture = shlex.quote(
+        (pathlib.Path(tempfile.gettempdir()) / f"claude-trim-{uuid.uuid4().hex}.out").as_posix())
+    run_filter = f"{shlex.quote(interpreter())} {shlex.quote(FILTER)} {capture}"
+    return f"{{\n{command}\n}} > {capture} 2>&1 && {run_filter} ok || {run_filter} failed"
 
 
 REWRITERS = {"Bash": rewrite_bash, "PowerShell": rewrite_powershell}
 
 
 def decide(command, tool_name):
-    """Return the rewritten command, or None to leave it untouched."""
+    """Return the rewritten command, or None to leave it untouched.
+
+    A missing filter leaves every command untouched: its output is worth more
+    than trimming it.
+    """
     rewrite = REWRITERS.get(tool_name)
     if rewrite is None or not command or "trim-output" in command:
         return None
     if EXEMPT.search(command):
         return None
     if not NOISY.search(command):
+        return None
+    if not pathlib.Path(FILTER).is_file():
         return None
     return rewrite(command)
 

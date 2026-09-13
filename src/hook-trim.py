@@ -103,7 +103,7 @@ def rewrite_bash(command):
 
     Nothing here asks the shell to expand anything. When reads outside the
     working directories are blocked, Claude Code asks the user about any
-    command it cannot analyse statically, so a `$(mktemp)` or a `$?` would
+    command it cannot analyze statically, so a `$(mktemp)` or a `$?` would
     make every rewritten build ask, even one the user has allowed. The capture
     path is chosen here instead, the filter learns the outcome from which side
     of `&& ... ||` runs it, and it removes the capture file itself.

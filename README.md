@@ -143,7 +143,7 @@ Details that are load-bearing in both:
   which is what keeps a `cd`, so a command that calls `exit` itself ends the
   shell before the filter sees its output.
 - **The Bash rewrite asks the shell to expand nothing.** Claude Code asks
-  before running a command it cannot analyse statically, and `$(mktemp)` or
+  before running a command it cannot analyze statically, and `$(mktemp)` or
   `$?` is exactly that, so every rewritten build would ask, even one on your
   allow list. Instead the hook names the capture file, and the filter learns
   the outcome from which side of `&& ... ||` runs it. It removes the capture
@@ -183,5 +183,5 @@ also run in a real `bash` where one is available.
 | Command matching | what gets wrapped, and what is deliberately left alone |
 | Rewrite shape | exit-status handling, working-directory preservation, a missing filter, multi-line capture, no shell expansion on Bash, and that neither shell's syntax leaks into the other |
 | Hook protocol | the JSON contract with Claude Code, including malformed input |
-| Filter behaviour | what survives and what is dropped, reading and removing a capture file, ANSI codes, carriage-return overwrites, and output the console codepage cannot encode |
+| Filter behavior | what survives and what is dropped, reading and removing a capture file, ANSI codes, carriage-return overwrites, and output the console codepage cannot encode |
 | Installation | platform-correct matcher selection, idempotent reinstall, and that merging into `settings.json` never disturbs anything else in it |

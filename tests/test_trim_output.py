@@ -174,7 +174,7 @@ class ReadingACaptureFile(unittest.TestCase):
 
 class TerminalControlCharacters(unittest.TestCase):
 
-    def test_ansi_colour_codes_are_stripped(self):
+    def test_ansi_color_codes_are_stripped(self):
         result = run_filter("\x1b[31mERROR: red\x1b[0m")
         self.assertIn("ERROR: red", result)
         self.assertNotIn("\x1b", result)

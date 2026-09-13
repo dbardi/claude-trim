@@ -1,6 +1,6 @@
 """What the hook decides to wrap, and what it must leave alone.
 
-Every case here was a real judgement call while building the hook. The
+Every case here was a real judgment call while building the hook. The
 false-positive tests matter more than the true positives: wrapping a watch
 task or an interactive server would hang the tool call.
 """
@@ -77,7 +77,7 @@ class QuietCommandsAreUntouched(unittest.TestCase):
         self.assertIsNone(wrapped(""))
 
 
-class ExemptionsAreHonoured(unittest.TestCase):
+class ExemptionsAreHonored(unittest.TestCase):
     """Matching NOISY is not enough - these would break or lose their point."""
 
     def test_informational_flags_where_the_output_is_the_answer(self):
@@ -137,9 +137,9 @@ class TheBashRewriteShape(unittest.TestCase):
     def test_merges_stderr_so_failures_are_not_lost(self):
         self.assertIn("2>&1", self.result)
 
-    def test_uses_no_shell_expansion_claude_code_cannot_analyse(self):
+    def test_uses_no_shell_expansion_claude_code_cannot_analyze(self):
         # When reads outside the working directories are blocked, Claude Code
-        # asks the user about any command it cannot analyse statically, and
+        # asks the user about any command it cannot analyze statically, and
         # command substitution or variable expansion is exactly that. Every
         # rewritten build would ask, even one the user has allowed.
         self.assertNotIn("$", self.result)

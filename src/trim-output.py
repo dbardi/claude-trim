@@ -1,9 +1,18 @@
 """Filter noisy command output down to the lines that carry information.
 
-Reads stdin, writes a trimmed version to stdout. Designed to sit on the right
-of a pipe in a PreToolUse-rewritten command:
+Two ways in. PowerShell pipes the output to stdin:
 
-    set -o pipefail; pnpm test 2>&1 | python ~/.claude/trim-output.py
+    ... | python ~/.claude/trim-output.py
+
+Bash names a capture file and the command's outcome, so the rewrite needs no
+shell expansion:
+
+    { pnpm test
+    } > /tmp/claude-trim-<id>.out 2>&1 && python ~/.claude/trim-output.py /tmp/claude-trim-<id>.out ok || python ~/.claude/trim-output.py /tmp/claude-trim-<id>.out failed
+
+The capture file is removed once read, and "failed" makes this exit 1 so the
+command's failure still shows. On PowerShell the exit code is the rewrite's
+concern, not this script's.
 
 Rules:
   * Short output passes through untouched (see KEEP_ALL_UNDER).
@@ -11,10 +20,8 @@ Rules:
   * Error / failure / warning lines are always kept.
   * The final summary (last TAIL_LINES) is always kept.
   * A one-line note reports how much was hidden.
-
-Exit code is not this script's concern - `set -o pipefail` in the rewritten
-command preserves the original command's status.
 """
+import pathlib
 import re
 import sys
 
@@ -92,13 +99,12 @@ def emit(text):
     sys.stdout.buffer.flush()
 
 
-def main():
-    raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+def trimmed(raw):
+    """The output worth reading, with a note saying how much was hidden."""
     lines = clean(raw)
 
     if len(lines) <= KEEP_ALL_UNDER:
-        emit("\n".join(lines) + ("\n" if lines else ""))
-        return
+        return "\n".join(lines) + ("\n" if lines else "")
 
     original = len(lines)
     lines = [l for l in lines if not PASSING.search(l)]
@@ -123,8 +129,23 @@ def main():
         note += f"; {dropped_signal} further matches capped"
     note += "; re-run without the pipe for full output]"
 
-    emit("\n".join(result) + "\n" + note + "\n")
+    return "\n".join(result) + "\n" + note + "\n"
+
+
+def main(argv=()):
+    """Filter a command's output: from stdin, or from a capture file."""
+    if not argv:
+        emit(trimmed(sys.stdin.buffer.read().decode("utf-8", errors="replace")))
+        return
+
+    capture, outcome = pathlib.Path(argv[0]), argv[1]
+    raw = capture.read_bytes().decode("utf-8", errors="replace")
+    capture.unlink()
+    emit(trimmed(raw))
+
+    if outcome != "ok":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

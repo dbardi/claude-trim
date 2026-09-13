@@ -180,7 +180,10 @@ class TheBashRewriteBehavesLikeTheOriginalCommand(unittest.TestCase):
         self.assertEqual(0, self.run_bash(hook.rewrite_bash("echo fine")).returncode)
 
     def test_a_failing_command_still_fails_and_keeps_its_output(self):
-        run = self.run_bash(hook.rewrite_bash("echo broken; exit 3"))
+        # Fails the way a build does, with a non-zero status. An explicit
+        # `exit` would end the shell itself, wrapped or not, because the
+        # group has to run in the current shell to keep any cd.
+        run = self.run_bash(hook.rewrite_bash("echo broken; false"))
         self.assertNotEqual(0, run.returncode)
         self.assertIn("broken", run.stdout)
 

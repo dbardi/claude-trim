@@ -72,6 +72,8 @@ Everything else, and deliberately these:
 - `--watch`, `--watchAll`, `dev`, `serve`, `start` — long-running or
   interactive; piping them would hang the call
 - anything already redirecting to a file
+- every command, if the filter script is missing: its output is worth more
+  than trimming it
 - short output. Under 60 lines passes through whole, untouched
 
 ## What survives the filter
@@ -112,14 +114,13 @@ The hook returns a rewritten command through
 `hookSpecificOutput.updatedInput`. On Bash:
 
 ```bash
-__ct=$(mktemp); {
+{
 <your command>
-} > "$__ct" 2>&1; __cs=$?
-{ [ -f "<filter>" ] && "<python>" "<filter>" < "$__ct" || cat "$__ct"; }
-rm -f "$__ct"; (exit $__cs)
+} > <capture> 2>&1 && <python> <filter> <capture> ok || <python> <filter> <capture> failed
 ```
 
-On PowerShell:
+where `<capture>` is a file in the system temp directory with a fresh name
+for every rewrite. On PowerShell:
 
 ```powershell
 $o = & { <your command> } 2>&1 | Out-String -Stream
@@ -134,16 +135,26 @@ Details that are load-bearing in both:
   different reasons. PowerShell has no `set -o pipefail`, so a pipeline would
   report the *filter's* exit code and a failed build would look successful.
   Bash runs every stage of a pipeline in a subshell, so a pipeline would
-  discard any `cd` the command performed — and Claude Code's Bash tool carries
-  the working directory between calls, so the *next* command would silently
-  run in the wrong place. `set -o pipefail` fixes the exit code but not that.
+  discard any `cd` the command performed. Claude Code's Bash tool carries the
+  working directory between calls, so the *next* command would silently run
+  in the wrong place. `set -o pipefail` fixes the exit code but not that.
 - **A brace group** so a multi-line command is captured whole; without it only
-  the final line would be redirected.
+  the final line would be redirected. The group runs in the current shell,
+  which is what keeps a `cd`, so a command that calls `exit` itself ends the
+  shell before the filter sees its output.
+- **The Bash rewrite asks the shell to expand nothing.** Claude Code asks
+  before running a command it cannot analyse statically, and `$(mktemp)` or
+  `$?` is exactly that, so every rewritten build would ask, even one on your
+  allow list. Instead the hook names the capture file, and the filter learns
+  the outcome from which side of `&& ... ||` runs it. It removes the capture
+  file once read and exits 1 on `failed`, so a failed build still fails.
+- **The filter is called as a plain command**, so an allow rule matches it:
+  `Bash(/usr/bin/python3 /home/you/.claude/trim-output.py *)`.
 - **The interpreter is an absolute path**, taken from the interpreter already
   running the hook. There is no bare `python` on most macOS and Linux
   installs.
-- **The filter is guarded.** If it is missing you get full output, not an
-  error.
+- **The filter is checked before rewriting.** If it is missing, the hook
+  leaves the command alone and you get full output, not an error.
 - **The filter path is resolved beside the hook**, so a `--target` install
   finds its own copy rather than a hardcoded `~/.claude`.
 
@@ -164,12 +175,13 @@ by uninstall returns `settings.json` to its original contents.
 python -m unittest discover -s tests
 ```
 
-71 tests, no dependencies beyond the standard library.
+78 tests, no dependencies beyond the standard library. The Bash rewrite is
+also run in a real `bash` where one is available.
 
 | Area | Covers |
 | --- | --- |
 | Command matching | what gets wrapped, and what is deliberately left alone |
-| Rewrite shape | exit-status handling, working-directory preservation, filter guards, multi-line capture, and that neither shell's syntax leaks into the other |
+| Rewrite shape | exit-status handling, working-directory preservation, a missing filter, multi-line capture, no shell expansion on Bash, and that neither shell's syntax leaks into the other |
 | Hook protocol | the JSON contract with Claude Code, including malformed input |
-| Filter behaviour | what survives and what is dropped, ANSI codes, carriage-return overwrites, and output the console codepage cannot encode |
+| Filter behaviour | what survives and what is dropped, reading and removing a capture file, ANSI codes, carriage-return overwrites, and output the console codepage cannot encode |
 | Installation | platform-correct matcher selection, idempotent reinstall, and that merging into `settings.json` never disturbs anything else in it |

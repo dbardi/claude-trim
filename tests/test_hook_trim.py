@@ -7,6 +7,9 @@ task or an interactive server would hang the tool call.
 import io
 import json
 import pathlib
+import re
+import shutil
+import subprocess
 import sys
 import unittest
 
@@ -16,6 +19,7 @@ hook = load("hook-trim.py")
 
 BACKSLASH = chr(92)
 POWERSHELL = "PowerShell"
+CAPTURE = re.compile(r"\}\s*>\s*(\S+)\s*2>&1")
 
 
 def wrapped(command, tool=POWERSHELL):
@@ -91,6 +95,15 @@ class ExemptionsAreHonoured(unittest.TestCase):
     def test_a_command_already_redirecting_to_a_file(self):
         self.assertIsNone(wrapped("pnpm build > build.log"))
 
+    def test_a_missing_filter_leaves_the_command_untouched(self):
+        # Wrapping a command around a filter that is not there would lose its
+        # output. Running it unwrapped loses nothing but the trimming.
+        real, hook.FILTER = hook.FILTER, "/nonexistent/trim-output.py"
+        try:
+            self.assertIsNone(wrapped("pnpm test", tool="Bash"))
+        finally:
+            hook.FILTER = real
+
 
 class ShellDispatch(unittest.TestCase):
     """Windows sessions drive PowerShell; macOS and Linux drive Bash. The
@@ -103,17 +116,17 @@ class ShellDispatch(unittest.TestCase):
 
     def test_each_shell_gets_its_own_syntax(self):
         self.assertIn("Out-String", wrapped("pnpm test", tool="PowerShell"))
-        self.assertIn("mktemp", wrapped("pnpm test", tool="Bash"))
+        self.assertRegex(wrapped("pnpm test", tool="Bash"), CAPTURE)
 
     def test_neither_shells_syntax_leaks_into_the_other(self):
-        self.assertNotIn("mktemp", wrapped("pnpm test", tool="PowerShell"))
+        self.assertNotRegex(wrapped("pnpm test", tool="PowerShell"), CAPTURE)
         self.assertNotIn("LASTEXITCODE", wrapped("pnpm test", tool="Bash"))
 
     def test_both_capture_before_filtering_for_the_same_reason(self):
         # Neither shell can filter in a pipeline without losing something:
         # PowerShell loses the exit code, Bash loses the working directory.
         self.assertIn("$o = &", wrapped("pnpm test", tool="PowerShell"))
-        self.assertIn("__ct=$(mktemp)", wrapped("pnpm test", tool="Bash"))
+        self.assertRegex(wrapped("pnpm test", tool="Bash"), CAPTURE)
 
 
 class TheBashRewriteShape(unittest.TestCase):
@@ -124,14 +137,24 @@ class TheBashRewriteShape(unittest.TestCase):
     def test_merges_stderr_so_failures_are_not_lost(self):
         self.assertIn("2>&1", self.result)
 
-    def test_captures_the_exit_status_before_the_filter_overwrites_it(self):
-        self.assertIn("__cs=$?", self.result)
+    def test_uses_no_shell_expansion_claude_code_cannot_analyse(self):
+        # When reads outside the working directories are blocked, Claude Code
+        # asks the user about any command it cannot analyse statically, and
+        # command substitution or variable expansion is exactly that. Every
+        # rewritten build would ask, even one the user has allowed.
+        self.assertNotIn("$", self.result)
+        self.assertNotIn("`", self.result)
 
-    def test_reraises_the_status_without_terminating_the_shell(self):
-        self.assertIn("(exit $__cs)", self.result)
+    def test_calls_the_filter_as_a_plain_command_an_allow_rule_can_match(self):
+        interpreter = pathlib.Path(sys.executable).as_posix()
+        self.assertIn(f"{interpreter} {hook.FILTER} ", self.result)
 
-    def test_degrades_to_cat_when_the_filter_is_missing(self):
-        self.assertIn("|| cat", self.result)
+    def test_each_rewrite_captures_to_its_own_file(self):
+        # Several sessions can build at once; a shared capture file would mix
+        # their output.
+        first = CAPTURE.search(wrapped("dotnet build", tool="Bash")).group(1)
+        second = CAPTURE.search(wrapped("dotnet build", tool="Bash")).group(1)
+        self.assertNotEqual(first, second)
 
     def test_the_command_is_never_placed_in_a_pipeline(self):
         # Bash runs every stage of a pipeline in a subshell, so piping the
@@ -140,17 +163,35 @@ class TheBashRewriteShape(unittest.TestCase):
         # calls, so that silently breaks the next one.
         self.assertNotIn("} 2>&1 |", self.result)
 
-    def test_redirects_to_a_file_so_the_group_stays_in_this_shell(self):
-        self.assertIn("mktemp", self.result)
-        self.assertRegex(self.result, r'\}\s*>\s*"\$__ct"\s*2>&1')
-
-    def test_cleans_up_after_itself(self):
-        self.assertIn('rm -f "$__ct"', self.result)
-
     def test_a_multi_line_command_is_captured_as_a_whole(self):
         # Without the group, only the final line would be redirected.
         result = wrapped("cd /repo\npnpm test", tool="Bash")
         self.assertIn("cd /repo\npnpm test\n}", result)
+
+
+@unittest.skipUnless(shutil.which("bash"), "needs bash")
+class TheBashRewriteBehavesLikeTheOriginalCommand(unittest.TestCase):
+    """Run the rewrite in a real shell: its shape only matters if it works."""
+
+    def run_bash(self, script):
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    def test_a_succeeding_command_still_succeeds(self):
+        self.assertEqual(0, self.run_bash(hook.rewrite_bash("echo fine")).returncode)
+
+    def test_a_failing_command_still_fails_and_keeps_its_output(self):
+        run = self.run_bash(hook.rewrite_bash("echo broken; exit 3"))
+        self.assertNotEqual(0, run.returncode)
+        self.assertIn("broken", run.stdout)
+
+    def test_a_cd_inside_the_command_carries_to_what_follows(self):
+        run = self.run_bash(hook.rewrite_bash("cd /") + "\npwd")
+        self.assertEqual("/", run.stdout.strip().splitlines()[-1])
+
+    def test_the_capture_file_is_removed(self):
+        rewrite = hook.rewrite_bash("echo fine")
+        self.run_bash(rewrite)
+        self.assertFalse(pathlib.Path(CAPTURE.search(rewrite).group(1)).exists())
 
 
 class WrappingIsIdempotent(unittest.TestCase):

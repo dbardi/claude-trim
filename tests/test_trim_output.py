@@ -6,6 +6,8 @@ failure is worse than no filter, so most of these tests are about what
 must NOT be lost.
 """
 import io
+import pathlib
+import tempfile
 import types
 import unittest
 
@@ -123,6 +125,51 @@ class SignalIsKept(unittest.TestCase):
 
     def test_the_test_summary(self):
         self.assertTrue(self.kept("Tests:       3 failed, 8 passed"))
+
+
+def run_filter_on(capture, status):
+    """Drive main() the way the Bash rewrite does - a capture file and the
+    command's outcome as arguments. Returns the output and the exit code."""
+    captured = io.BytesIO()
+    fake = types.SimpleNamespace(stdout=types.SimpleNamespace(buffer=captured))
+    real, trim.sys = trim.sys, fake
+    code = 0
+    try:
+        trim.main([str(capture), status])
+    except SystemExit as exit_:
+        code = exit_.code
+    finally:
+        trim.sys = real
+    return captured.getvalue().decode("utf-8"), code
+
+
+class ReadingACaptureFile(unittest.TestCase):
+    """The Bash rewrite hands over a file rather than a pipe, so it needs no
+    shell expansion Claude Code would have to ask about."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.capture = pathlib.Path(self.directory.name) / "capture.out"
+        self.capture.write_text("one\ntwo", encoding="utf-8")
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def test_the_output_is_read_from_the_file(self):
+        output, _ = run_filter_on(self.capture, "ok")
+        self.assertEqual(["one", "two"], output.strip().split("\n"))
+
+    def test_the_file_is_removed_once_read(self):
+        run_filter_on(self.capture, "ok")
+        self.assertFalse(self.capture.exists())
+
+    def test_a_command_that_succeeded_exits_cleanly(self):
+        _, code = run_filter_on(self.capture, "ok")
+        self.assertIn(code, (0, None))
+
+    def test_a_command_that_failed_is_reported_as_a_failure(self):
+        _, code = run_filter_on(self.capture, "failed")
+        self.assertEqual(1, code)
 
 
 class TerminalControlCharacters(unittest.TestCase):
